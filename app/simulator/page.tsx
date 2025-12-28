@@ -16,6 +16,41 @@ function fmt(n: number) {
   return (Math.round(n * 1000) / 1000).toString();
 }
 
+// Vẽ hình chữ nhật bo góc an toàn (không phụ thuộc ctx.roundRect)
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+
+  const anyCtx = ctx as any;
+  if (typeof anyCtx.roundRect === "function") {
+    anyCtx.roundRect(x, y, w, h, rr);
+    return;
+  }
+
+  // fallback bo góc thủ công
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+
+  ctx.closePath();
+}
+
 function Chart({
   title,
   data,
@@ -51,9 +86,29 @@ function Chart({
 
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="mt-2">
         <rect x="0" y="0" width={w} height={h} rx="16" fill="#f8fafc" />
-        <line x1={pad} y1={h / 2} x2={w - pad} y2={h / 2} stroke="#cbd5e1" strokeWidth="2" />
-        <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="#cbd5e1" strokeWidth="2" />
-        <polyline points={points} fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinejoin="round" />
+        <line
+          x1={pad}
+          y1={h / 2}
+          x2={w - pad}
+          y2={h / 2}
+          stroke="#cbd5e1"
+          strokeWidth="2"
+        />
+        <line
+          x1={pad}
+          y1={pad}
+          x2={pad}
+          y2={h - pad}
+          stroke="#cbd5e1"
+          strokeWidth="2"
+        />
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#0ea5e9"
+          strokeWidth="3"
+          strokeLinejoin="round"
+        />
       </svg>
 
       <div className="mt-1 text-xs text-slate-500">
@@ -63,7 +118,7 @@ function Chart({
   );
 }
 
-// dùng useSearchParams ở component con (để bọc Suspense bên ngoài)
+// Component con: dùng useSearchParams ở đây
 function SimulatorContent() {
   const sp = useSearchParams();
 
@@ -72,8 +127,11 @@ function SimulatorContent() {
   const [phi, setPhi] = useState(Math.PI / 3);
 
   const [running, setRunning] = useState(true);
-  const t0Ref = useRef<number>(0);
+
+  // tRef: thời gian mô phỏng (cộng dồn theo từng frame)
   const tRef = useRef<number>(0);
+  // lastMsRef: mốc thời gian frame trước đó
+  const lastMsRef = useRef<number>(0);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -83,7 +141,11 @@ function SimulatorContent() {
 
   // load init from query params or localStorage
   useEffect(() => {
-    const saved = getJSON<Params>(LS_KEY_PARAMS, { A: 2, omega: 5, phi: Math.PI / 3 });
+    const saved = getJSON<Params>(LS_KEY_PARAMS, {
+      A: 2,
+      omega: 5,
+      phi: Math.PI / 3,
+    });
 
     const qA = sp.get("A");
     const qW = sp.get("w");
@@ -117,18 +179,28 @@ function SimulatorContent() {
   useEffect(() => {
     let raf = 0;
 
-    const draw = (tMs: number) => {
-      if (!t0Ref.current) t0Ref.current = tMs;
-      const dt = (tMs - t0Ref.current) / 1000;
+    // reset mốc thời gian khi effect chạy lại (kéo slider sẽ re-run effect)
+    lastMsRef.current = 0;
 
-      if (running) tRef.current = dt;
+    const draw = (tMs: number) => {
+      // Nếu mới bắt đầu hoặc vừa quay lại tab / restart effect
+      if (!lastMsRef.current) lastMsRef.current = tMs;
+
+      let dt = (tMs - lastMsRef.current) / 1000;
+
+      // Chặn trường hợp dt quá lớn (đổi tab, máy lag) hoặc âm
+      if (dt < 0 || dt > 0.2) dt = 0;
+
+      lastMsRef.current = tMs;
+
+      if (running) tRef.current += dt;
       const t = tRef.current;
 
       const x = A * Math.cos(omega * t + phi);
       const v = -A * omega * Math.sin(omega * t + phi);
       const acc = -A * omega * omega * Math.cos(omega * t + phi);
 
-      // update series only when running (tránh spam điểm khi pause)
+      // update series only when running
       if (running) {
         const push = (arr: { t: number; y: number }[], y: number) => {
           const next = [...arr, { t, y }].filter((p) => t - p.t <= 4);
@@ -166,7 +238,7 @@ function SimulatorContent() {
           ctx.fillRect(30, 20, 18, H - 40);
 
           // map x to pixels
-          const scale = (W * 0.30) / 10; // 10 units -> 30% width
+          const scale = (W * 0.30) / 10;
           const massX = midX + x * scale;
           const massY = H / 2;
 
@@ -177,6 +249,7 @@ function SimulatorContent() {
           const endX = massX - 30;
           const coils = 10;
           const amp = 14;
+
           ctx.beginPath();
           ctx.moveTo(startX, massY);
           for (let i = 1; i < coils; i++) {
@@ -187,19 +260,12 @@ function SimulatorContent() {
           ctx.lineTo(endX, massY);
           ctx.stroke();
 
-          // mass
+          // mass (khối cam)
           ctx.fillStyle = "#f59e0b";
           ctx.strokeStyle = "#b45309";
           ctx.lineWidth = 3;
 
-          const rr = (ctx as any).roundRect as undefined | ((x: number, y: number, w: number, h: number, r: number) => void);
-          ctx.beginPath();
-          if (typeof rr === "function") {
-            rr(massX - 30, massY - 22, 60, 44, 12);
-          } else {
-            // fallback: rect thường
-            ctx.rect(massX - 30, massY - 22, 60, 44);
-          }
+          roundRectPath(ctx, massX - 30, massY - 22, 60, 44, 12);
           ctx.fill();
           ctx.stroke();
 
@@ -224,7 +290,9 @@ function SimulatorContent() {
     <main className="mx-auto max-w-6xl px-4 py-10">
       <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-sky-50 to-white p-6 shadow-sm">
         <div className="text-sm font-semibold text-slate-600">Module 1</div>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Mô phỏng Dao động điều hòa</h1>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
+          Mô phỏng Dao động điều hòa
+        </h1>
         <p className="mt-2 max-w-3xl text-slate-700">
           Kéo các thanh trượt để quan sát đồng thời mô phỏng và đồ thị x(t), v(t), a(t).
         </p>
@@ -240,8 +308,8 @@ function SimulatorContent() {
           <button
             className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
             onClick={() => {
-              t0Ref.current = 0;
               tRef.current = 0;
+              lastMsRef.current = 0;
               setSeriesX([]);
               setSeriesV([]);
               setSeriesAcc([]);
@@ -250,16 +318,28 @@ function SimulatorContent() {
             Reset
           </button>
 
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/decoder">
+          <Link
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+            href="/decoder"
+          >
             Module 2: Giải mã
           </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/tutor">
+          <Link
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+            href="/tutor"
+          >
             Module 4: Trợ giảng
           </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/challenge">
+          <Link
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+            href="/challenge"
+          >
             Module 5: Thử thách
           </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/progress">
+          <Link
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+            href="/progress"
+          >
             Xem tiến độ
           </Link>
         </div>
@@ -268,7 +348,12 @@ function SimulatorContent() {
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="text-sm font-semibold">Mô phỏng (Con lắc lò xo)</div>
-          <canvas ref={canvasRef} width={720} height={260} className="mt-3 w-full rounded-2xl border border-slate-200" />
+          <canvas
+            ref={canvasRef}
+            width={720}
+            height={260}
+            className="mt-3 w-full rounded-2xl border border-slate-200"
+          />
 
           <div className="mt-5 grid gap-4">
             <div>
@@ -276,7 +361,15 @@ function SimulatorContent() {
                 <span className="font-semibold">Biên độ A</span>
                 <span className="text-slate-600">{fmt(A)}</span>
               </div>
-              <input type="range" min={0.5} max={10} step={0.1} value={A} onChange={(e) => setA(Number(e.target.value))} className="mt-2 w-full" />
+              <input
+                type="range"
+                min={0.5}
+                max={10}
+                step={0.1}
+                value={A}
+                onChange={(e) => setA(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
             </div>
 
             <div>
@@ -284,7 +377,15 @@ function SimulatorContent() {
                 <span className="font-semibold">Tần số góc ω</span>
                 <span className="text-slate-600">{fmt(omega)}</span>
               </div>
-              <input type="range" min={0.5} max={20} step={0.1} value={omega} onChange={(e) => setOmega(Number(e.target.value))} className="mt-2 w-full" />
+              <input
+                type="range"
+                min={0.5}
+                max={20}
+                step={0.1}
+                value={omega}
+                onChange={(e) => setOmega(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
             </div>
 
             <div>
@@ -292,13 +393,22 @@ function SimulatorContent() {
                 <span className="font-semibold">Pha ban đầu φ</span>
                 <span className="text-slate-600">{fmt(phi)}</span>
               </div>
-              <input type="range" min={-Math.PI} max={Math.PI} step={0.01} value={phi} onChange={(e) => setPhi(Number(e.target.value))} className="mt-2 w-full" />
+              <input
+                type="range"
+                min={-Math.PI}
+                max={Math.PI}
+                step={0.01}
+                value={phi}
+                onChange={(e) => setPhi(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
             </div>
 
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <div className="font-bold">Góc Toán–Lý</div>
               <div className="mt-2">
-                T = {fmt(derived.T)} s • f = {fmt(derived.f)} Hz • v_max = {fmt(derived.vmax)} • a_max = {fmt(derived.amax)}
+                T = {fmt(derived.T)} s • f = {fmt(derived.f)} Hz • v_max ={" "}
+                {fmt(derived.vmax)} • a_max = {fmt(derived.amax)}
               </div>
               <div className="mt-1 text-amber-900/90">
                 Công thức: x(t)=A·cos(ωt+φ), v(t)=-Aω·sin(ωt+φ), a(t)=-Aω²·cos(ωt+φ)
