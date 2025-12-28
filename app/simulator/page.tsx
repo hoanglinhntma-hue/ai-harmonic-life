@@ -63,8 +63,7 @@ function Chart({
   );
 }
 
-
-// ✅ Tách useSearchParams vào component con để bọc Suspense
+// dùng useSearchParams ở component con (để bọc Suspense bên ngoài)
 function SimulatorContent() {
   const sp = useSearchParams();
 
@@ -80,7 +79,7 @@ function SimulatorContent() {
 
   const [seriesX, setSeriesX] = useState<{ t: number; y: number }[]>([]);
   const [seriesV, setSeriesV] = useState<{ t: number; y: number }[]>([]);
-  const [seriesA, setSeriesA] = useState<{ t: number; y: number }[]>([]);
+  const [seriesAcc, setSeriesAcc] = useState<{ t: number; y: number }[]>([]);
 
   // load init from query params or localStorage
   useEffect(() => {
@@ -106,8 +105,9 @@ function SimulatorContent() {
   }, [A, omega, phi]);
 
   const derived = useMemo(() => {
-    const T = (2 * Math.PI) / Math.abs(omega);
-    const f = Math.abs(omega) / (2 * Math.PI);
+    const wAbs = Math.max(1e-6, Math.abs(omega));
+    const T = (2 * Math.PI) / wAbs;
+    const f = wAbs / (2 * Math.PI);
     const vmax = Math.abs(A * omega);
     const amax = Math.abs(A * omega * omega);
     return { T, f, vmax, amax };
@@ -119,19 +119,16 @@ function SimulatorContent() {
 
     const draw = (tMs: number) => {
       if (!t0Ref.current) t0Ref.current = tMs;
+      const dt = (tMs - t0Ref.current) / 1000;
 
-      // chỉ cập nhật thời gian khi đang chạy
-      if (running) {
-        const dt = (tMs - t0Ref.current) / 1000;
-        tRef.current = dt;
-      }
-
+      if (running) tRef.current = dt;
       const t = tRef.current;
+
       const x = A * Math.cos(omega * t + phi);
       const v = -A * omega * Math.sin(omega * t + phi);
       const acc = -A * omega * omega * Math.cos(omega * t + phi);
 
-      // chỉ cập nhật series khi đang chạy (đỡ spam state lúc pause)
+      // update series only when running (tránh spam điểm khi pause)
       if (running) {
         const push = (arr: { t: number; y: number }[], y: number) => {
           const next = [...arr, { t, y }].filter((p) => t - p.t <= 4);
@@ -139,7 +136,7 @@ function SimulatorContent() {
         };
         setSeriesX((s) => push(s, x));
         setSeriesV((s) => push(s, v));
-        setSeriesA((s) => push(s, acc));
+        setSeriesAcc((s) => push(s, acc));
       }
 
       // draw spring-mass
@@ -194,13 +191,13 @@ function SimulatorContent() {
           ctx.fillStyle = "#f59e0b";
           ctx.strokeStyle = "#b45309";
           ctx.lineWidth = 3;
-          ctx.beginPath();
 
-          // roundRect fallback để TS/Canvas không kêu
-          const rr = (ctx as any).roundRect;
+          const rr = (ctx as any).roundRect as undefined | ((x: number, y: number, w: number, h: number, r: number) => void);
+          ctx.beginPath();
           if (typeof rr === "function") {
-            (ctx as any).roundRect(massX - 30, massY - 22, 60, 44, 12);
+            rr(massX - 30, massY - 22, 60, 44, 12);
           } else {
+            // fallback: rect thường
             ctx.rect(massX - 30, massY - 22, 60, 44);
           }
           ctx.fill();
@@ -212,4 +209,118 @@ function SimulatorContent() {
           ctx.fillText(`t = ${fmt(t)} s`, 12, 20);
           ctx.fillText(`x(t) = ${fmt(x)}`, 12, 42);
           ctx.fillText(`v(t) = ${fmt(v)}`, 12, 64);
-          ct
+          ctx.fillText(`a(t) = ${fmt(acc)}`, 12, 86);
+        }
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [A, omega, phi, running]);
+
+  return (
+    <main className="mx-auto max-w-6xl px-4 py-10">
+      <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-sky-50 to-white p-6 shadow-sm">
+        <div className="text-sm font-semibold text-slate-600">Module 1</div>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Mô phỏng Dao động điều hòa</h1>
+        <p className="mt-2 max-w-3xl text-slate-700">
+          Kéo các thanh trượt để quan sát đồng thời mô phỏng và đồ thị x(t), v(t), a(t).
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            className="rounded-2xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
+            onClick={() => setRunning((r) => !r)}
+          >
+            {running ? "Tạm dừng" : "Chạy tiếp"}
+          </button>
+
+          <button
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+            onClick={() => {
+              t0Ref.current = 0;
+              tRef.current = 0;
+              setSeriesX([]);
+              setSeriesV([]);
+              setSeriesAcc([]);
+            }}
+          >
+            Reset
+          </button>
+
+          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/decoder">
+            Module 2: Giải mã
+          </Link>
+          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/tutor">
+            Module 4: Trợ giảng
+          </Link>
+          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/challenge">
+            Module 5: Thử thách
+          </Link>
+          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/progress">
+            Xem tiến độ
+          </Link>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="text-sm font-semibold">Mô phỏng (Con lắc lò xo)</div>
+          <canvas ref={canvasRef} width={720} height={260} className="mt-3 w-full rounded-2xl border border-slate-200" />
+
+          <div className="mt-5 grid gap-4">
+            <div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-semibold">Biên độ A</span>
+                <span className="text-slate-600">{fmt(A)}</span>
+              </div>
+              <input type="range" min={0.5} max={10} step={0.1} value={A} onChange={(e) => setA(Number(e.target.value))} className="mt-2 w-full" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-semibold">Tần số góc ω</span>
+                <span className="text-slate-600">{fmt(omega)}</span>
+              </div>
+              <input type="range" min={0.5} max={20} step={0.1} value={omega} onChange={(e) => setOmega(Number(e.target.value))} className="mt-2 w-full" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-semibold">Pha ban đầu φ</span>
+                <span className="text-slate-600">{fmt(phi)}</span>
+              </div>
+              <input type="range" min={-Math.PI} max={Math.PI} step={0.01} value={phi} onChange={(e) => setPhi(Number(e.target.value))} className="mt-2 w-full" />
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <div className="font-bold">Góc Toán–Lý</div>
+              <div className="mt-2">
+                T = {fmt(derived.T)} s • f = {fmt(derived.f)} Hz • v_max = {fmt(derived.vmax)} • a_max = {fmt(derived.amax)}
+              </div>
+              <div className="mt-1 text-amber-900/90">
+                Công thức: x(t)=A·cos(ωt+φ), v(t)=-Aω·sin(ωt+φ), a(t)=-Aω²·cos(ωt+φ)
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          <Chart title="x(t) – Li độ" data={seriesX} yLabel="x" />
+          <Chart title="v(t) – Vận tốc" data={seriesV} yLabel="v" />
+          <Chart title="a(t) – Gia tốc" data={seriesAcc} yLabel="a" />
+        </div>
+      </div>
+    </main>
+  );
+}
+
+export default function SimulatorPage() {
+  return (
+    <Suspense fallback={<div className="p-4">Đang tải...</div>}>
+      <SimulatorContent />
+    </Suspense>
+  );
+}
