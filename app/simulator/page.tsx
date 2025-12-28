@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { LS_KEY_PARAMS, LS_KEY_ATTEMPTS } from "@/lib/keys";
+import { LS_KEY_PARAMS } from "@/lib/keys";
 import { getJSON, setJSON } from "@/lib/storage";
 
 type Params = { A: number; omega: number; phi: number };
-type Attempt = { id: string; taskId?: string; score: number; note: string; submittedAtISO: string };
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -49,14 +48,14 @@ function Chart({
         <div className="text-sm font-semibold">{title}</div>
         <div className="text-xs text-slate-500">{yLabel}</div>
       </div>
+
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="mt-2">
         <rect x="0" y="0" width={w} height={h} rx="16" fill="#f8fafc" />
-        {/* axes */}
         <line x1={pad} y1={h / 2} x2={w - pad} y2={h / 2} stroke="#cbd5e1" strokeWidth="2" />
         <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="#cbd5e1" strokeWidth="2" />
-        {/* waveform */}
         <polyline points={points} fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinejoin="round" />
       </svg>
+
       <div className="mt-1 text-xs text-slate-500">
         min={fmt(minY)} • max={fmt(maxY)}
       </div>
@@ -64,7 +63,9 @@ function Chart({
   );
 }
 
-export default function SimulatorPage() {
+
+// ✅ Tách useSearchParams vào component con để bọc Suspense
+function SimulatorContent() {
   const sp = useSearchParams();
 
   const [A, setA] = useState(2);
@@ -118,22 +119,28 @@ export default function SimulatorPage() {
 
     const draw = (tMs: number) => {
       if (!t0Ref.current) t0Ref.current = tMs;
-      const dt = (tMs - t0Ref.current) / 1000;
-      if (running) tRef.current = dt;
+
+      // chỉ cập nhật thời gian khi đang chạy
+      if (running) {
+        const dt = (tMs - t0Ref.current) / 1000;
+        tRef.current = dt;
+      }
 
       const t = tRef.current;
       const x = A * Math.cos(omega * t + phi);
       const v = -A * omega * Math.sin(omega * t + phi);
       const acc = -A * omega * omega * Math.cos(omega * t + phi);
 
-      // update series (window 4s, 240 points max)
-      const push = (arr: { t: number; y: number }[], y: number) => {
-        const next = [...arr, { t, y }].filter((p) => t - p.t <= 4);
-        return next.slice(-240);
-      };
-      setSeriesX((s) => push(s, x));
-      setSeriesV((s) => push(s, v));
-      setSeriesA((s) => push(s, acc));
+      // chỉ cập nhật series khi đang chạy (đỡ spam state lúc pause)
+      if (running) {
+        const push = (arr: { t: number; y: number }[], y: number) => {
+          const next = [...arr, { t, y }].filter((p) => t - p.t <= 4);
+          return next.slice(-240);
+        };
+        setSeriesX((s) => push(s, x));
+        setSeriesV((s) => push(s, v));
+        setSeriesA((s) => push(s, acc));
+      }
 
       // draw spring-mass
       const canvas = canvasRef.current;
@@ -188,7 +195,14 @@ export default function SimulatorPage() {
           ctx.strokeStyle = "#b45309";
           ctx.lineWidth = 3;
           ctx.beginPath();
-          ctx.roundRect(massX - 30, massY - 22, 60, 44, 12);
+
+          // roundRect fallback để TS/Canvas không kêu
+          const rr = (ctx as any).roundRect;
+          if (typeof rr === "function") {
+            (ctx as any).roundRect(massX - 30, massY - 22, 60, 44, 12);
+          } else {
+            ctx.rect(massX - 30, massY - 22, 60, 44);
+          }
           ctx.fill();
           ctx.stroke();
 
@@ -198,133 +212,4 @@ export default function SimulatorPage() {
           ctx.fillText(`t = ${fmt(t)} s`, 12, 20);
           ctx.fillText(`x(t) = ${fmt(x)}`, 12, 42);
           ctx.fillText(`v(t) = ${fmt(v)}`, 12, 64);
-          ctx.fillText(`a(t) = ${fmt(acc)}`, 12, 86);
-        }
-      }
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [A, omega, phi, running]);
-
-  return (
-    <main className="mx-auto max-w-6xl px-4 py-10">
-      <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-sky-50 to-white p-6 shadow-sm">
-        <div className="text-sm font-semibold text-slate-600">Module 1</div>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Mô phỏng Dao động điều hòa</h1>
-        <p className="mt-2 max-w-3xl text-slate-700">
-          Kéo các thanh trượt để quan sát đồng thời mô phỏng và đồ thị x(t), v(t), a(t).
-        </p>
-
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            className="rounded-2xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
-            onClick={() => setRunning((r) => !r)}
-          >
-            {running ? "Tạm dừng" : "Chạy tiếp"}
-          </button>
-          <button
-            className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-            onClick={() => {
-              t0Ref.current = 0;
-              tRef.current = 0;
-              setSeriesX([]);
-              setSeriesV([]);
-              setSeriesA([]);
-            }}
-          >
-            Reset
-          </button>
-
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/decoder">
-            Module 2: Giải mã
-          </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/tutor">
-            Module 4: Trợ giảng
-          </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/challenge">
-            Module 5: Thử thách
-          </Link>
-          <Link className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50" href="/progress">
-            Xem tiến độ
-          </Link>
-        </div>
-      </div>
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-sm font-semibold">Mô phỏng (Con lắc lò xo)</div>
-          <canvas ref={canvasRef} width={720} height={260} className="mt-3 w-full rounded-2xl border border-slate-200" />
-
-          <div className="mt-5 grid gap-4">
-            <div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold">Biên độ A</span>
-                <span className="text-slate-600">{fmt(A)}</span>
-              </div>
-              <input
-                type="range"
-                min={0.5}
-                max={10}
-                step={0.1}
-                value={A}
-                onChange={(e) => setA(Number(e.target.value))}
-                className="mt-2 w-full"
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold">Tần số góc ω</span>
-                <span className="text-slate-600">{fmt(omega)}</span>
-              </div>
-              <input
-                type="range"
-                min={0.5}
-                max={20}
-                step={0.1}
-                value={omega}
-                onChange={(e) => setOmega(Number(e.target.value))}
-                className="mt-2 w-full"
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold">Pha ban đầu φ</span>
-                <span className="text-slate-600">{fmt(phi)}</span>
-              </div>
-              <input
-                type="range"
-                min={-Math.PI}
-                max={Math.PI}
-                step={0.01}
-                value={phi}
-                onChange={(e) => setPhi(Number(e.target.value))}
-                className="mt-2 w-full"
-              />
-            </div>
-
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <div className="font-bold">Góc Toán–Lý</div>
-              <div className="mt-2">
-                T = {fmt(derived.T)} s • f = {fmt(derived.f)} Hz • v_max = {fmt(derived.vmax)} • a_max = {fmt(derived.amax)}
-              </div>
-              <div className="mt-1 text-amber-900/90">
-                Công thức: x(t)=A·cos(ωt+φ), v(t)=-Aω·sin(ωt+φ), a(t)=-Aω²·cos(ωt+φ)
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-4">
-          <Chart title="x(t) – Li độ" data={seriesX} yLabel="x" />
-          <Chart title="v(t) – Vận tốc" data={seriesV} yLabel="v" />
-          <Chart title="a(t) – Gia tốc" data={seriesA} yLabel="a" />
-        </div>
-      </div>
-    </main>
-  );
-}
+          ct
